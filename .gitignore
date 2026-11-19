@@ -1,0 +1,30 @@
+# Gradle
+.gradle/
+build/
+
+# Gradle wrapper
+gradle-app.setting
+gradle-wrapper.jar
+
+# Java
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.war
+*.ear
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+bin/
+out/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and crash reports
+*.log
+hs_err_pid*
+replay_pid*

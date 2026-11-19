@@ -1,0 +1,21 @@
+name: CeilingWalk
+version: 1.0.0
+main: me.ceilingwalk.CeilingWalkPlugin
+api-version: '26.3'
+description: Walk on ceilings with inverted gravity and an upside-down screen.
+commands:
+  ceilingwalk:
+    description: Toggle ceiling walking
+    usage: /<command> [player|toggle|autojump [player]|f5-mode|hide-mouse-warning [true|false]|reload|help|about|version]
+    aliases: [cw]
+    permission: ceilingwalk.use
+permissions:
+  ceilingwalk.use:
+    description: Toggle ceiling walking for yourself
+    default: op
+  ceilingwalk.others:
+    description: Toggle ceiling walking for other players
+    default: op
+  ceilingwalk.reload:
+    description: Reload the CeilingWalk config and data
+    default: op

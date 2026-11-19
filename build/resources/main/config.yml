@@ -1,0 +1,112 @@
+# +--------------------------------------------------------------------------+
+# |    ------====== CEILING WALK (Reversed Gravity) PLUGIN ======------      |
+# |                       --- By TheTWIXhunter ---                           |
+# +--------------------------------------------------------------------------+
+# |                                                                          |                                          |
+# | More information about this config file can be found here:               |
+# | https://thetwixhunter.nekoweb.org/ceilingwalk/guides/configuration.html  |
+# |                                                                          |
+# | !!!!      --- THIS PLUGIN BUNDELS WITH A RESOURCE PACK ---          !!!! |
+# |  The resource pack can be found at:                                      |
+# |  https://modrinth.com/plugin/ceilingwalk/version/1                       |
+# |                                                                          |
+# |  and can also be found in the plugin's data folder (/plugins/CeilingWalk)|
+# |  It is strongly recommended to use the resource pack for the post-effect |
+# |  to work properly, if you don't use the pack then your screen won't turn.|                                                       |
+# +--------------------------------------------------------------------------+
+
+
+# Gravity attribute while ceiling walking. Vanilla default is 0.08.
+# Negative = you fall upward and land on ceilings.
+gravity: -0.08
+
+# Post effect that flips the screen (needs the upside_down resource pack on the client).
+# If you don't use the resource pack, you can set this to "none" to disable the post effect.
+post-effect: "upsidedown:flip"
+
+# Show the mannequin to its owner by default when using /cw f5-mode.
+f5-mode-default: false
+
+# Enable auto-jump for new players by default.
+auto-jump-default: true
+
+# Show the mouse inversion warning whenever a player toggles /cw.
+# Players can hide it permanently with /cw hide-mouse-warning.
+mouse-warning:
+  enabled: true
+
+# Warn players when toggling /cw in Creative or Spectator mode.
+creative-warning:
+  enabled: true
+
+craft-engine-compat:
+  # Add this plugin's resource pack to CraftEngine's external zip merge list.
+  enabled: true
+  # Location relative to the server root, as used by CraftEngine.
+  resource-pack-location: "CeilingWalk/CeilingWalk-resourcepack.zip"
+  # Location of CraftEngine's configuration file.
+  craft-engine-config-location: "plugins/CraftEngine/config.yml"
+
+messages:
+  on: "Ceiling walking ON for %player%"
+  off: "Ceiling walking OFF for %player%"
+  autojump-on: "Auto-jump ON for %player%"
+  autojump-off: "Auto-jump OFF for %player%"
+  f5-mode-on: "F5 mannequin mode ON"
+  f5-mode-off: "F5 mannequin mode OFF"
+  about: "CeilingWalk - inverted-gravity ceiling walking by theTWIXhunter."
+  version: "CeilingWalk version %version%"
+  usage: "Usage: /cw [toggle|autojump|f5-mode] [player] [true|false]"
+  console-player-only: "This command can only be used by players."
+  mouse-warning-hidden: "Mouse inversion warning hidden."
+  mouse-warning-shown: "Mouse inversion warning shown."
+  reload-success: "CeilingWalk config and data.yml reloaded."
+  no-reload-permission: "You don't have permission to reload CeilingWalk."
+  enable-failed: "Could not enable ceiling walking (no gravity attribute?)."
+  no-autojump-others-permission: "You don't have permission to change other players' auto-jump."
+  no-toggle-others-permission: "You don't have permission to toggle other players."
+  player-not-found: "Player not found: %player%"
+
+  creative-spectator-warning: "You are using /cw in Creative or Spectator mode. If you experience issues, disable /cw, return to Survival mode, and enable /cw again."
+  creative-warning-label: "[Warning]:"
+  creative-warning-toggle: " Toggeling "
+  creative-warning-command: "/cw"
+  creative-warning-while: " while in "
+  creative-warning-mode: "creative or spectator"
+  creative-warning-end: " can have unforseen sideeffects!"
+  creative-warning-recovery: "If you get stuck or are having issues then try disabling /cw, switch to survival and then re-enable /cw."
+
+  mouse-warning-label: "[Ceiling-walk TIP]: "
+  mouse-warning-body: "Enable \"Invert mouse X/Y\" in control options for a smoother expirence.\nYou can find them in \"options\" > \"controls\" > \"mouse settings\" "
+  mouse-warning-more-info: "MORE INFO"
+  mouse-warning: "Enable \"Invert mouse X/Y\" in Options > Controls > Mouse Settings."
+  mouse-warning-hide-button: "HIDE ME"
+  mouse-warning-hide-hover: "Hide this mouse warning permanently"
+
+  status-prefix: "Ceiling walk turned "
+  status-suffix: " for %player%."
+  status-on: "ON"
+  status-off: "OFF"
+  status-separator: ","
+  status-f5-label: "F5-mode: "
+  status-f5-hover-on: "Click to toggle F5-mode ON"
+  status-f5-hover-off: "Click to toggle F5-mode OFF"
+  status-autojump-label: "Auto-Jump: "
+  status-autojump-hover-on: "Click to turn AutoJump ON"
+  status-autojump-hover-off: "Click to turn AutoJump OFF"
+  
+  help-title: "======= CEILING WALK / REVERSE GRAVITY =======\n       ---- A plugin by: theTWIXhunter ----"
+  help-cw: "(toggle ceiling walk on and off)"
+  help-f5: "(toggle an upside-down manequin)"
+  help-autojump: "(toggle autojump on and off)"
+  help-help: "(show this help message)"
+  help-version: "(show version info)"
+  help-about: "(show about info)"
+  help-toggle: "(alias of the main /cw)"
+  help-mouse-warning: "(toggle the mouse inversion warning)"
+  help-reload: "(reload config.yml and data.yml)"
+  help-mouse-tip: "Mouse TIP: Enable \"Invert mouse X/Y\" in Options > Controls > Mouse Settings."
+  help-download: "Download:"
+  help-download-link: "Modrinth.com/CeilingWalk"
+  help-more-info: "More info: "
+  help-website: "theTWIXhunter.nekoweb.org/ceilingwalk/"
