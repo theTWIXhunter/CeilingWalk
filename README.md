@@ -29,7 +29,7 @@ You can choose if you want players to be able to switch between the ground and t
 - /cw toggle (alias of the main /cw)
 
 ## Config:
-´´´
+```
 # +--------------------------------------------------------------------------+
 # |    ------====== CEILING WALK (Reversed Gravity) PLUGIN ======------      |
 # |                       --- By TheTWIXhunter ---                           |
@@ -81,6 +81,6 @@ craft-engine-compat:
 
 messages:
 # Every message string is translatable here but it's too much to display here.
-´´´ 
+```
 
 
