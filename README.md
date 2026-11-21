@@ -52,6 +52,10 @@ You can choose if you want players to be able to switch between the ground and t
 # Negative = you fall upward and land on ceilings.
 gravity: -0.08
 
+
+# Log right-click and block-place diagnostics to the server console.
+debug-placement: false
+
 # Post effect that flips the screen (needs the upside_down resource pack on the client).
 # If you don't use the resource pack, you can set this to "none" to disable the post effect.
 post-effect: "upsidedown:flip"

@@ -2,6 +2,7 @@ name: CeilingWalk
 version: 1.0.0
 main: me.ceilingwalk.CeilingWalkPlugin
 api-version: '26.3'
+softdepend: [PacketEvents]
 description: Walk on ceilings with inverted gravity and an upside-down screen.
 commands:
   ceilingwalk:

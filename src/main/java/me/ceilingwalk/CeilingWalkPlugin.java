@@ -65,6 +65,9 @@ import java.util.Collections;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 
 public final class CeilingWalkPlugin extends JavaPlugin implements Listener, CommandExecutor, TabCompleter {
 
@@ -89,10 +92,12 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
     private final Map<UUID, Boolean> f5Mode = new HashMap<>();
     private final Map<UUID, Boolean> mouseWarningHidden = new HashMap<>();
     private final Map<UUID, Boolean> sneaking = new HashMap<>();
-    private final Set<UUID> interactionPending = new HashSet<>();
+    private final Set<UUID> debugFrozen = new HashSet<>();
+    private final Set<UUID> debugMountDetached = new HashSet<>();
     private File playerDataFile;
     private YamlConfiguration playerData;
     private NamespacedKey flagKey;
+
 
     @Override
     public void onEnable() {
@@ -108,7 +113,186 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
             cmd.setTabCompleter(this);
         }
 
+        getLogger().info("[placement-debug] enabled=" + getConfig().getBoolean("debug-placement", false));
         getServer().getScheduler().runTaskTimer(this, this::tickVehicles, 1L, 1L);
+        setupPacketEventsDiagnostics();
+    }
+
+    private void setupPacketEventsDiagnostics() {
+        if (!getConfig().getBoolean("debug-placement", false)) {
+            return;
+        }
+
+        String[] listenerPackages = {
+                "com.github.retrooper.packetevents.event.PacketListener",
+                "io.github.retrooper.packetevents.event.PacketListener"
+        };
+        String[] apiPackages = {
+                "com.github.retrooper.packetevents.PacketEvents",
+                "io.github.retrooper.packetevents.PacketEvents"
+        };
+
+        for (int i = 0; i < listenerPackages.length; i++) {
+            try {
+                Class<?> packetEventsClass = Class.forName(apiPackages[i]);
+                Method getApi = packetEventsClass.getMethod("getAPI");
+                Object api = getApi.invoke(null);
+                Method getEventManager = api.getClass().getMethod("getEventManager");
+                Object eventManager = getEventManager.invoke(api);
+
+                Class<?> listenerClass = Class.forName(listenerPackages[i]);
+                InvocationHandler handler = (proxy, method, args) -> {
+                    if (args != null && args.length == 1 && "onPacketReceive".equals(method.getName())) {
+                        logPacketReceive(args[0]);
+                    }
+                    return null;
+                };
+                Object listener = Proxy.newProxyInstance(
+                        listenerClass.getClassLoader(),
+                        new Class<?>[] { listenerClass },
+                        handler);
+
+                Method registerListener = findMethod(eventManager.getClass(), "registerListener",
+                        listenerClass);
+                if (registerListener == null) {
+                    getLogger().warning("[placement-debug] PacketEvents API found, but registerListener is unavailable.");
+                    return;
+                }
+                registerListener.invoke(eventManager, listener);
+                getLogger().info("[placement-debug] PacketEvents raw incoming-packet logging enabled.");
+                return;
+            } catch (ReflectiveOperationException | LinkageError ignored) {
+                // Try the alternate package name used by older/newer PacketEvents releases.
+            }
+        }
+
+        getLogger().warning("[placement-debug] PacketEvents not found. Install PacketEvents to log raw incoming packets.");
+    }
+
+    private Method findMethod(Class<?> type, String name, Class<?> parameterType) {
+        for (Method method : type.getMethods()) {
+            if (method.getName().equals(name)
+                    && method.getParameterCount() == 1
+                    && method.getParameterTypes()[0].isAssignableFrom(parameterType)) {
+                return method;
+            }
+            if (method.getName().equals(name)
+                    && method.getParameterCount() == 1
+                    && parameterType.isAssignableFrom(method.getParameterTypes()[0])) {
+                return method;
+            }
+        }
+        return null;
+    }
+
+    private void logPacketReceive(Object event) {
+        if (!getConfig().getBoolean("debug-placement", false)) {
+            return;
+        }
+
+        try {
+            Method getPacketType = event.getClass().getMethod("getPacketType");
+            Object packetType = getPacketType.invoke(event);
+            String typeName = packetType == null ? "UNKNOWN" : packetType.toString();
+            String upper = typeName.toUpperCase(java.util.Locale.ROOT);
+            if (!upper.contains("BLOCK") && !upper.contains("USE_ITEM")
+                    && !upper.contains("INTERACT") && !upper.contains("SWING")
+                    && !upper.contains("PLAYER_ACTION") && !upper.contains("PLAYER_DIGGING")) {
+                return;
+            }
+
+            String playerName = "unknown";
+            Player player = null;
+            try {
+                Method getPlayer = event.getClass().getMethod("getPlayer");
+                Object eventPlayer = getPlayer.invoke(event);
+                if (eventPlayer instanceof Player p) {
+                    player = p;
+                    playerName = p.getName();
+                }
+            } catch (ReflectiveOperationException ignored) {
+                // Some PacketEvents versions expose no Player on the receive event.
+            }
+
+            Object packet = null;
+            try {
+                Method getPacket = event.getClass().getMethod("getPacket");
+                packet = getPacket.invoke(event);
+            } catch (ReflectiveOperationException ignored) {
+                // Packet type alone is still useful when packet wrappers are unavailable.
+            }
+
+            String position = "unknown";
+            String pitchYaw = "unknown";
+            String vehicle = "none";
+            String mainHand = "none";
+            String offHand = "none";
+            if (player != null) {
+                Location loc = player.getLocation();
+                position = formatDebugLocation(loc);
+                pitchYaw = "yaw=" + loc.getYaw() + ",pitch=" + loc.getPitch();
+                if (player.getVehicle() != null) {
+                    vehicle = formatDebugLocation(player.getVehicle().getLocation());
+                }
+                mainHand = formatDebugItem(player.getInventory().getItemInMainHand());
+                offHand = formatDebugItem(player.getInventory().getItemInOffHand());
+            }
+
+            getLogger().info("[placement-debug] packet-receive player=" + playerName
+                    + " type=" + typeName
+                    + " packet=" + (packet == null ? "unavailable" : packet.getClass().getName())
+                    + " pos=" + position
+                    + " eye=" + (player == null ? "unknown" : formatDebugLocation(player.getEyeLocation()))
+                    + " look=" + pitchYaw
+                    + " vehicle=" + vehicle
+                    + " mainHand=" + mainHand
+                    + " offHand=" + offHand
+                    + " packetFields=" + inspectPacketFields(packet));
+        } catch (ReflectiveOperationException ex) {
+            getLogger().warning("[placement-debug] Could not inspect PacketEvents receive event: " + ex);
+        }
+    }
+
+    private String inspectPacketFields(Object packet) {
+        if (packet == null) {
+            return "{}";
+        }
+
+        StringBuilder fields = new StringBuilder("{");
+        boolean first = true;
+        for (String name : new String[] {
+                "getPosition", "getBlockPosition", "getFace", "getBlockFace",
+                "getHand", "getInteractionHand", "getAction", "getSequence",
+                "getCursorPosition", "getInsideBlock", "getUseItem",
+                "getDirection", "getEntityId", "getEntityType",
+                "isSneaking", "isCrouching", "isShiftKeyDown"
+        }) {
+            try {
+                Method method = packet.getClass().getMethod(name);
+                Object value = method.invoke(packet);
+                if (!first) {
+                    fields.append(',');
+                }
+                fields.append(name).append('=').append(value);
+                first = false;
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // Optional PacketEvents wrapper field.
+            }
+        }
+        return fields.append('}').toString();
+    }
+
+    private String formatDebugLocation(Location location) {
+        return location.getWorld().getName() + "@"
+                + String.format(java.util.Locale.ROOT, "%.3f,%.3f,%.3f",
+                location.getX(), location.getY(), location.getZ());
+    }
+
+    private String formatDebugItem(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return "AIR";
+        }
+        return item.getType() + "x" + item.getAmount();
     }
 
     private void setPlayerVisibility(Player target, boolean visible) {
@@ -219,6 +403,39 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length >= 1 && args[0].equalsIgnoreCase("mount")) {
+            if (!(sender instanceof Player p)) {
+                sender.sendMessage("Only players can use the debug mount control.");
+                return true;
+            }
+            if (args.length > 2 || (args.length == 2 && !isBoolean(args[1]))) {
+                sender.sendMessage("Usage: /cw mount [true|false]");
+                return true;
+            }
+            boolean mounted = args.length == 2
+                    ? Boolean.parseBoolean(args[1])
+                    : debugMountDetached.contains(p.getUniqueId());
+            setDebugMount(p, mounted);
+            sender.sendMessage("[CeilingWalk debug] ArmorStand mount "
+                    + (mounted ? "ON" : "OFF"));
+            return true;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("freeze")) {
+            if (!(sender instanceof Player p)) {
+                sender.sendMessage("Only players can use the debug freeze.");
+                return true;
+            }
+            if (args.length > 2 || (args.length == 2 && !isBoolean(args[1]))) {
+                sender.sendMessage("Usage: /cw freeze [true|false]");
+                return true;
+            }
+            boolean frozen = args.length == 2
+                    ? Boolean.parseBoolean(args[1])
+                    : !debugFrozen.contains(p.getUniqueId());
+            setDebugFrozen(p, frozen);
+            sender.sendMessage("[CeilingWalk debug] Freeze " + (frozen ? "ON" : "OFF"));
+            return true;
+        }
         if (args.length >= 1 && args[0].equalsIgnoreCase("about")) {
             sender.sendMessage(message("messages.about", null));
             return true;
@@ -351,6 +568,8 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
             }
             setupCraftEngineCompatibility();
             sender.sendMessage(message("messages.reload-success", null));
+            getLogger().info("[placement-debug] enabled=" + getConfig().getBoolean("debug-placement", false));
+            setupPacketEventsDiagnostics();
             return true;
         }
 
@@ -653,7 +872,12 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
             return false;
         }
         if (usesPhysics) {
-            gravity.setBaseValue(getConfig().getDouble("gravity", -0.08));
+            gravity.setBaseValue(debugMountDetached.contains(p.getUniqueId())
+                    ? 0.0
+                    : getConfig().getDouble("gravity", -0.08));
+        }
+        if (debugFrozen.contains(p.getUniqueId()) && gravity != null) {
+            gravity.setBaseValue(0.0);
         }
 
         // Standing on a ceiling is "not on ground" for the server, which would kick
@@ -684,6 +908,7 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
             return false;
         }
         vehicles.put(p.getUniqueId(), vehicle);
+        debugMountDetached.add(p.getUniqueId());
         mannequins.put(p.getUniqueId(), spawnMannequin(p));
         if (!f5Mode.getOrDefault(p.getUniqueId(), f5ModeDefault())) {
             p.hideEntity(this, mannequins.get(p.getUniqueId()));
@@ -693,7 +918,7 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
             }
         }
         passengerOffsets.put(p.getUniqueId(), p.getLocation().getY() - vehicle.getLocation().getY());
-        vehicleBaseY.put(p.getUniqueId(), vehicle.getLocation().getY());
+        vehicleBaseY.put(p.getUniqueId(), p.getLocation().getY());
         verticalVelocities.put(p.getUniqueId(), 0.0);
         horizontalVelocities.put(p.getUniqueId(), new Vector());
         sneaking.put(p.getUniqueId(), p.isSneaking());
@@ -704,6 +929,7 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
 
     private void disable(Player p, boolean removeEffect) {
         ArmorStand vehicle = vehicles.remove(p.getUniqueId());
+        debugMountDetached.remove(p.getUniqueId());
         Mannequin mannequin = mannequins.remove(p.getUniqueId());
         passengerOffsets.remove(p.getUniqueId());
         vehicleBaseY.remove(p.getUniqueId());
@@ -712,14 +938,18 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
         jumpHeld.remove(p.getUniqueId());
         internalDismount.remove(p.getUniqueId());
         sneaking.remove(p.getUniqueId());
-        interactionPending.remove(p.getUniqueId());
+        if (debugFrozen.remove(p.getUniqueId())) {
+            AttributeInstance gravity = p.getAttribute(Attribute.GRAVITY);
+            if (gravity != null) {
+                gravity.setBaseValue(getConfig().getDouble("gravity", -0.08));
+            }
+        }
         if (vehicle != null && vehicle.isValid()) {
             if (p.getVehicle() == vehicle) {
                 internalDismount.add(p.getUniqueId());
                 p.leaveVehicle();
                 internalDismount.remove(p.getUniqueId());
                 sneaking.remove(p.getUniqueId());
-                interactionPending.remove(p.getUniqueId());
             }
             vehicle.remove();
         }
@@ -773,10 +1003,6 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
                 maxHealth.setBaseValue(0.0);
             }
         });
-        if (!vehicle.addPassenger(p)) {
-            vehicle.remove();
-            return null;
-        }
         return vehicle;
     }
 
@@ -866,11 +1092,8 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
         for (UUID id : new ArrayList<>(active)) {
             Player p = Bukkit.getPlayer(id);
             ArmorStand vehicle = vehicles.get(id);
-            if (p == null || (vehicle != null && (!vehicle.isValid()
+            if (p == null || (!debugMountDetached.contains(id) && vehicle != null && (!vehicle.isValid()
                     || vehicle.getWorld() != p.getWorld() || p.getVehicle() != vehicle))) {
-                if (interactionPending.contains(id)) {
-                    continue;
-                }
                 if (p != null) {
                     disable(p, true);
                 } else {
@@ -890,6 +1113,9 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
                 continue;
             }
             if (vehicle == null) {
+                if (debugMountDetached.contains(id)) {
+                    continue;
+                }
                 continue;
             }
             Mannequin mannequin = mannequins.get(id);
@@ -897,7 +1123,8 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
                 updateMannequin(p, mannequin);
             }
             applyHiddenPlayerEquipment(p);
-            if (interactionPending.contains(id)) {
+            if (debugMountDetached.contains(id)) {
+                movePlayerDirect(p);
                 continue;
             }
             if (p.getVehicle() != vehicle) {
@@ -907,9 +1134,198 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
         }
     }
 
+    private void setDebugMount(Player p, boolean mounted) {
+        UUID id = p.getUniqueId();
+        ArmorStand vehicle = vehicles.get(id);
+        AttributeInstance gravity = p.getAttribute(Attribute.GRAVITY);
+        if (!mounted) {
+            debugMountDetached.add(id);
+            if (gravity != null) {
+                gravity.setBaseValue(0.0);
+            }
+            if (vehicle != null) {
+                if (p.getVehicle() == vehicle) {
+                    internalDismount.add(id);
+                    p.leaveVehicle();
+                    internalDismount.remove(id);
+                }
+                vehicle.remove();
+            }
+            vehicles.remove(id);
+            passengerOffsets.remove(id);
+            vehicleBaseY.remove(id);
+            verticalVelocities.remove(id);
+            horizontalVelocities.remove(id);
+            return;
+        }
+
+        debugMountDetached.remove(id);
+        if (gravity != null) {
+            gravity.setBaseValue(getConfig().getDouble("gravity", -0.08));
+        }
+        ArmorStand newVehicle = spawnVehicle(p);
+        if (newVehicle == null) {
+            p.sendMessage("[CeilingWalk debug] Could not recreate the ArmorStand mount.");
+            return;
+        }
+        if (!newVehicle.addPassenger(p)) {
+            newVehicle.remove();
+            p.sendMessage("[CeilingWalk debug] Could not mount the player on the ArmorStand.");
+            return;
+        }
+        vehicles.put(id, newVehicle);
+        passengerOffsets.put(id, p.getLocation().getY() - newVehicle.getLocation().getY());
+        vehicleBaseY.put(id, newVehicle.getLocation().getY());
+        verticalVelocities.put(id, 0.0);
+        horizontalVelocities.put(id, new Vector());
+    }
+
+    private void movePlayerDirect(Player p) {
+        UUID id = p.getUniqueId();
+        Input input = p.getCurrentInput();
+        if (debugFrozen.contains(id)) {
+            p.setVelocity(new Vector());
+            return;
+        }
+        boolean isSneaking = sneaking.getOrDefault(id, input.isSneak());
+        sneaking.put(id, isSneaking);
+        p.setPose(Pose.STANDING);
+
+        Location current = p.getLocation();
+        double originalX = current.getX();
+        double originalY = current.getY();
+        double originalZ = current.getZ();
+        jumpHeld.remove(id);
+
+        float radiansYaw = (float) Math.toRadians(current.getYaw());
+        double forwardX = -Math.sin(radiansYaw);
+        double forwardZ = Math.cos(radiansYaw);
+        double leftX = -Math.cos(radiansYaw);
+        double leftZ = -Math.sin(radiansYaw);
+
+        double targetX = 0.0;
+        double targetZ = 0.0;
+        if (input.isForward()) {
+            targetX += forwardX;
+            targetZ += forwardZ;
+        }
+        if (input.isBackward()) {
+            targetX -= forwardX;
+            targetZ -= forwardZ;
+        }
+        if (input.isLeft()) {
+            targetX += leftX;
+            targetZ += leftZ;
+        }
+        if (input.isRight()) {
+            targetX -= leftX;
+            targetZ -= leftZ;
+        }
+
+        double movementLength = Math.hypot(targetX, targetZ);
+        if (movementLength > 0.0) {
+            double movementSpeed = isSneaking ? 0.065 : 0.2;
+            double deltaX = targetX / movementLength * movementSpeed;
+            double deltaZ = targetZ / movementLength * movementSpeed;
+            double candidateX = current.getX() + deltaX;
+            double candidateZ = current.getZ() + deltaZ;
+            if (isPlayerSpaceClear(current.getWorld(), candidateX, originalY,
+                    candidateZ, isSneaking)) {
+                current.setX(candidateX);
+                current.setZ(candidateZ);
+            } else {
+                if (isPlayerSpaceClear(current.getWorld(), candidateX, originalY,
+                        current.getZ(), isSneaking)) {
+                    current.setX(candidateX);
+                }
+                if (isPlayerSpaceClear(current.getWorld(), current.getX(), originalY,
+                        candidateZ, isSneaking)) {
+                    current.setZ(candidateZ);
+                }
+            }
+        }
+
+        p.setVelocity(new Vector());
+        applyCeilingEyeDistance(p, current);
+        if (Math.abs(current.getX() - originalX) > 0.0001
+                || Math.abs(current.getY() - originalY) > 0.0001
+                || Math.abs(current.getZ() - originalZ) > 0.0001) {
+            p.teleport(current);
+        }
+    }
+
+    private void applyCeilingEyeDistance(Player p, Location current) {
+        double cameraDistance = getConfig().getDouble("camera-ceiling-distance", 1.62);
+        double eyeY = current.getY() + 1.62;
+        World world = current.getWorld();
+
+        int minX = (int) Math.floor(current.getX() - 0.30);
+        int maxX = (int) Math.floor(current.getX() + 0.30);
+        int minZ = (int) Math.floor(current.getZ() - 0.30);
+        int maxZ = (int) Math.floor(current.getZ() + 0.30);
+        int minY = (int) Math.floor(eyeY + 0.05);
+        int maxY = (int) Math.floor(eyeY + 5.00);
+
+        Double closestUnderside = null;
+        for (int blockX = minX; blockX <= maxX; blockX++) {
+            for (int blockY = minY; blockY <= maxY; blockY++) {
+                for (int blockZ = minZ; blockZ <= maxZ; blockZ++) {
+                    Block block = world.getBlockAt(blockX, blockY, blockZ);
+                    for (BoundingBox shape : block.getCollisionShape().getBoundingBoxes()) {
+                        double undersideY = blockY + shape.getMinY();
+                        if (undersideY > eyeY
+                                && (closestUnderside == null || undersideY < closestUnderside)) {
+                            closestUnderside = undersideY;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (closestUnderside == null) {
+            return;
+        }
+
+        double desiredLocationY = closestUnderside - cameraDistance - 1.62;
+        if (Math.abs(current.getY() - desiredLocationY) > 0.01) {
+            current.setY(desiredLocationY);
+        }
+    }
+
+    private void setDebugFrozen(Player p, boolean frozen) {
+        UUID id = p.getUniqueId();
+        AttributeInstance gravity = p.getAttribute(Attribute.GRAVITY);
+        if (frozen) {
+            debugFrozen.add(id);
+            if (gravity != null) {
+                gravity.setBaseValue(0.0);
+            }
+            p.setVelocity(new Vector());
+            jumpHeld.remove(id);
+            verticalVelocities.put(id, 0.0);
+            horizontalVelocities.put(id, new Vector());
+        } else {
+            debugFrozen.remove(id);
+            if (gravity != null) {
+                gravity.setBaseValue(debugMountDetached.contains(id)
+                        ? 0.0
+                        : getConfig().getDouble("gravity", -0.08));
+            }
+        }
+    }
+
     private void moveVehicle(Player p, ArmorStand vehicle) {
         Input input = p.getCurrentInput();
         UUID id = p.getUniqueId();
+        if (debugFrozen.contains(id)) {
+            p.setVelocity(new Vector());
+            jumpHeld.remove(id);
+            verticalVelocities.put(id, 0.0);
+            horizontalVelocities.put(id, new Vector());
+            p.setPose(Pose.STANDING);
+            vehicle.teleport(vehicle.getLocation());
+            return;
+        }
         boolean isSneaking = sneaking.getOrDefault(id, input.isSneak());
         sneaking.put(id, isSneaking);
         p.setPose(Pose.STANDING);
@@ -1296,6 +1712,11 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
     }
 
     private boolean isSupported(Player p, double gravity) {
+        if (debugMountDetached.contains(p.getUniqueId())) {
+            Location location = p.getLocation();
+            return isDirectSupportedAt(location.getWorld(), location.getX(),
+                    location.getY(), location.getZ(), gravity);
+        }
         ArmorStand vehicle = vehicles.get(p.getUniqueId());
         if (vehicle == null || !vehicle.isValid()) {
             return false;
@@ -1304,6 +1725,33 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
         Location location = vehicle.getLocation();
         return isSupportedAt(location.getWorld(), location.getX(), location.getY(),
                 location.getZ(), gravity);
+    }
+
+    private boolean isDirectSupportedAt(World world, double playerX, double playerY,
+            double playerZ, double gravity) {
+        double supportY = gravity < 0 ? playerY + 1.81 : playerY - 0.11;
+        int minX = (int) Math.floor(playerX - 0.3);
+        int maxX = (int) Math.floor(playerX + 0.3);
+        int minZ = (int) Math.floor(playerZ - 0.3);
+        int maxZ = (int) Math.floor(playerZ + 0.3);
+        int supportBlockY = (int) Math.floor(supportY);
+        double localY = supportY - supportBlockY;
+
+        for (int blockX = minX; blockX <= maxX; blockX++) {
+            for (int blockZ = minZ; blockZ <= maxZ; blockZ++) {
+                Block block = world.getBlockAt(blockX, supportBlockY, blockZ);
+                for (BoundingBox shapeBox : block.getCollisionShape().getBoundingBoxes()) {
+                    if (shapeBox.getMinY() <= localY && shapeBox.getMaxY() >= localY
+                            && shapeBox.getMaxX() > playerX - 0.3 - blockX
+                            && shapeBox.getMinX() < playerX + 0.3 - blockX
+                            && shapeBox.getMaxZ() > playerZ - 0.3 - blockZ
+                            && shapeBox.getMinZ() < playerZ + 0.3 - blockZ) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private boolean isSupportedAt(World world, double vehicleX, double vehicleY,
@@ -1347,23 +1795,35 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
     public void onInteract(PlayerInteractEvent e) {
         Player p = e.getPlayer();
         UUID id = p.getUniqueId();
-        ArmorStand vehicle = vehicles.get(id);
-        if (!active.contains(id) || vehicle == null
-                || e.getAction() != Action.RIGHT_CLICK_BLOCK
-                || p.getVehicle() != vehicle || interactionPending.contains(id)) {
+        if (e.getAction() == Action.RIGHT_CLICK_BLOCK
+                && getConfig().getBoolean("debug-placement", false)) {
+            ArmorStand vehicle = vehicles.get(id);
+            getLogger().info("[placement-debug] raw-interact player=" + p.getName()
+                    + " active=" + active.contains(id)
+                    + " vehicle=" + (vehicle == null ? "null" : vehicle.getUniqueId())
+                    + " actualVehicle=" + (p.getVehicle() == null ? "null" : p.getVehicle().getUniqueId())
+                    + " clicked=" + (e.getClickedBlock() == null ? "null" : formatBlock(e.getClickedBlock()))
+                    + " face=" + e.getBlockFace()
+                    + " item=" + (e.getItem() == null ? "null" : e.getItem().getType())
+                    + " cancelled=" + e.isCancelled());
+        }
+        if (!active.contains(id) || e.getAction() != Action.RIGHT_CLICK_BLOCK
+                || p.getVehicle() != vehicles.get(id)) {
             return;
         }
 
-        interactionPending.add(id);
-        internalDismount.add(id);
-        p.leaveVehicle();
-        internalDismount.remove(id);
-        Bukkit.getScheduler().runTaskLater(this, () -> {
-            interactionPending.remove(id);
-            if (active.contains(id) && vehicle.isValid() && p.isOnline()) {
-                vehicle.addPassenger(p);
-            }
-        }, 2L);
+    }
+
+    private String formatBlock(Block block) {
+        return block.getWorld().getName() + "@"
+                + block.getX() + "," + block.getY() + "," + block.getZ()
+                + "/" + block.getType();
+    }
+
+    private String formatBlockLocation(Location location) {
+        return location.getWorld().getName() + "@"
+                + String.format(java.util.Locale.ROOT, "%.3f,%.3f,%.3f",
+                location.getX(), location.getY(), location.getZ());
     }
 
     @EventHandler
@@ -1386,6 +1846,17 @@ public final class CeilingWalkPlugin extends JavaPlugin implements Listener, Com
             Mannequin mannequin = mannequins.get(e.getPlayer().getUniqueId());
             if (mannequin != null && mannequin.isValid()) {
                 mannequin.swingMainHand();
+            }
+            if (getConfig().getBoolean("debug-placement", false)
+                    && active.contains(e.getPlayer().getUniqueId())) {
+                Player p = e.getPlayer();
+                ArmorStand vehicle = vehicles.get(p.getUniqueId());
+                getLogger().info("[placement-debug] arm-swing player=" + p.getName()
+                        + " pos=" + formatBlockLocation(p.getLocation())
+                        + " eye=" + formatBlockLocation(p.getEyeLocation())
+                        + " yaw=" + p.getLocation().getYaw()
+                        + " pitch=" + p.getLocation().getPitch()
+                        + " vehicle=" + (vehicle == null ? "none" : formatBlockLocation(vehicle.getLocation())));
             }
         }
     }
